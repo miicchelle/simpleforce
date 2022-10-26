@@ -50,7 +50,7 @@ type QueryResult struct {
 
 // Expose sid to save in admin settings
 func (client *Client) GetSid() (sid string) {
-        return client.sessionID
+	return client.sessionID
 }
 
 //Expose Loc to save in admin settings
@@ -60,8 +60,8 @@ func (client *Client) GetLoc() (loc string) {
 
 // Set SID and Loc as a means to log in without LoginPassword
 func (client *Client) SetSidLoc(sid string, loc string) {
-        client.sessionID = sid
-        client.instanceURL = loc
+	client.sessionID = sid
+	client.instanceURL = loc
 }
 
 // Query runs an SOQL query. q could either be the SOQL string or the nextRecordsURL.
@@ -92,6 +92,65 @@ func (client *Client) Query(q string) (*QueryResult, error) {
 
 	var result QueryResult
 	err = json.Unmarshal(data, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reference to client is needed if the object will be further used to do online queries.
+	for idx := range result.Records {
+		result.Records[idx].setClient(client)
+	}
+
+	return &result, nil
+}
+
+type Token struct {
+	Token    string
+	Instance string
+}
+
+// Query runs an SOQL query. q could either be the SOQL string or the nextRecordsURL.
+func (client *Client) QueryWithToken(q string, t Token) (*QueryResult, error) {
+	var u string
+	if strings.HasPrefix(q, "/services/data") {
+		// q is nextRecordsURL.
+		u = fmt.Sprintf("%s%s", t.Instance, q)
+	} else {
+		// q is SOQL.
+		formatString := "%s/services/data/v%s/query?q=%s"
+		baseURL := t.Instance
+		if client.useToolingAPI {
+			formatString = strings.Replace(formatString, "query", "tooling/query", -1)
+		}
+		u = fmt.Sprintf(formatString, baseURL, client.apiVersion, url.QueryEscape(q))
+	}
+
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("%v %v", "Bearer", t.Token))
+
+	c := &http.Client{}
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	// data, err := client.httpRequest("GET", u, nil)
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Println("Error while reading the response bytes:", err)
+	}
+	if err != nil {
+		log.Println(logPrefix, "HTTP GET request failed:", u)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result QueryResult
+	err = json.Unmarshal([]byte(body), &result)
 	if err != nil {
 		return nil, err
 	}
